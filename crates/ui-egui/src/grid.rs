@@ -3687,6 +3687,19 @@ mod tests {
     }
 
     #[test]
+    fn vertical_text_keeps_lithuanian_diacritics_whole_and_upright() {
+        // Precomposed Lithuanian letters: one line each, never split or detached.
+        let upper = "ĄČĘĖĮŠŲŪŽ";
+        let lower = "ąčęėįšųūž";
+        assert_eq!(vertical_text_lines(upper), upper.chars().map(|c| c.to_string()).collect::<Vec<_>>());
+        assert_eq!(vertical_text_lines(lower).len(), lower.chars().count());
+        // A decomposed base letter plus a combining ogonek stays one line (no detached mark).
+        assert_eq!(vertical_text_lines("a\u{0328}"), ["a\u{0328}"]);
+        // Upper and lower variants stack in source order, one glyph each.
+        assert_eq!(vertical_text_lines("ĄąČč").len(), 4);
+    }
+
+    #[test]
     fn vertical_text_block_follows_the_cell_alignment() {
         let rect = Rect::from_min_max(pos2(10.0, 20.0), pos2(60.0, 120.0));
         let widths = [12.0, 12.0, 12.0];

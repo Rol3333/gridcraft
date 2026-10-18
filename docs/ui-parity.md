@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (horizontal scrollbar in the sheet tab bar, #840) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-18 · **Change:** minor (stacked vertical text — `textRotation="255"` — matches the grid in print/PDF: upright glyphs, alignment and clipping) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -60,7 +60,7 @@ this logic, with one undo step.
 | Context menus on row/column headers, sheet tabs, charts, shapes | headers and tabs done; objects partial |
 | Quick Analysis (Ctrl+Q) | missing |
 | Smooth scrolling, scrollbars | done; vertical scrollbar added 10-09 (#73); horizontal scrollbar in the tab bar (60/40 split, drag, track click pages) 10-13 (#176, #840); the tabs/scrollbar split can't be dragged yet |
-| Text overflow into empty neighbours, wrap, rotation, shrink to fit | done |
+| Text overflow into empty neighbours, wrap, rotation, shrink to fit | done; includes stacked vertical text (`textRotation="255"`: one upright glyph per line, reading down), honoured by the grid and by print/PDF export with the cell's horizontal/vertical alignment and bottom clipping |
 
 ## Keyboard
 
@@ -161,6 +161,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-18 | minor | Stacked vertical text (`textRotation="255"`): the grid's one-upright-glyph-per-line rendering now also governs print/PDF export — horizontal alignment places the glyph column (Fill right, Center Across/Distributed centred), vertical alignment places the block (Justify/Distributed centre), the block never starts above the cell and is clipped at the bottom, and glyphs split on grapheme clusters |
 | 2026-10-12 | minor | The File view's recent list tells when each workbook was last changed, read off the UI thread |
 | 2026-10-13 | minor | Horizontal scrollbar in the sheet tab bar: drag, track click pages, frozen columns excluded from the page (#840) |
 | 2026-10-12 | minor | Ctrl+wheel zoom steps along a ladder of percentages about 20% apart that never skips 100%, gliding to each step with animations on, so a notch out undoes a notch in (it drifted: 100 → 122 → 101); Excel steps 15 points, see decisions.md |
