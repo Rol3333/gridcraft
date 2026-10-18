@@ -16,6 +16,7 @@ mod roundtrip;
 mod sheet_names;
 mod smooth_roundtrip;
 mod trendline_roundtrip;
+mod vertical_text;
 mod xls_tests;
 mod xlsb_tests;
 

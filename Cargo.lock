@@ -1649,6 +1649,7 @@ dependencies = [
  "skrifa",
  "sys-locale",
  "toml",
+ "unicode-segmentation",
  "web-sys",
  "zbus",
 ]
