@@ -1084,18 +1084,30 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
     }
     let is_num = matches!(v, Value::Number(_));
     let wrap = st.align.wrap;
+    let rot = st.align.rotation;
+    let vertical = rot == 255;
     let mut text = if sh.show_formulas {
         crate::display::cell_text(wb, sh, c)
     } else if code == "General"
         && let Value::Number(n) = v
     {
         let digit = gridcraft_pdf::text_width(font, size, "0").max(0.1);
-        let max_chars = (avail / digit).floor().max(1.0) as usize;
+        let max_chars = if vertical {
+            // Stacked vertical text has one glyph per line, so a General number is fitted to the
+            // row height, not the column width. Horizontal text keeps the column-width fit.
+            (((h - 2.0 * pad) / (size * 1.2)).floor().max(1.0)) as usize
+        } else {
+            (avail / digit).floor().max(1.0) as usize
+        };
         gridcraft_numfmt::format_general_fit(n, max_chars.min(11)).unwrap_or_else(|| "#".repeat(max_chars.min(255)))
     } else {
         // The look's code, which a conditional format can override (#1163).
         crate::display::value_text_as(wb, &v, code)
     };
+    // Stacked vertical text ignores horizontal wrapping, so keep the formatted source before the
+    // newline/shrink/# passes below, which are horizontal-only. Only vertical cells pay for the
+    // copy; `vertical_text_lines` drops CR/LF itself.
+    let stacked = vertical.then(|| text.clone());
     if !wrap {
         text = text.replace(['\n', '\r'], " ");
     }
@@ -1103,11 +1115,11 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
         return;
     }
     let mut tw = gridcraft_pdf::text_width(font, size, &text);
-    if st.align.shrink && !wrap && tw > avail && tw > 0.0 {
+    if st.align.shrink && !wrap && !vertical && tw > avail && tw > 0.0 {
         size = (size * avail / tw).max(1.0);
         tw = gridcraft_pdf::text_width(font, size, &text);
     }
-    if is_num && !wrap && tw > avail + 0.01 && !sh.show_formulas {
+    if is_num && !wrap && !vertical && tw > avail + 0.01 && !sh.show_formulas {
         let hash = gridcraft_pdf::text_width(font, size, "#").max(0.1);
         text = "#".repeat(((avail / hash).floor().max(1.0) as usize).min(255));
         tw = gridcraft_pdf::text_width(font, size, &text);
@@ -1126,11 +1138,7 @@ fn draw_text(pg: &mut Page, b: &Block, c: CellRef, l: &Look, rect: (f32, f32, f3
         HAlign::Justify | HAlign::Fill => HAlign::Left,
         other => other,
     };
-    let rot = st.align.rotation;
-    let rotated = rot != 0 && rot != 255;
-    // Stacked vertical text ignores horizontal wrapping, so keep the glyph source (the formatted
-    // text) before the lines below consume it. Only vertical cells pay for the copy.
-    let stacked = (rot == 255).then(|| text.clone());
+    let rotated = rot != 0 && !vertical;
     // Rotated text wraps along its own direction: upright (±90°) text to the row height.
     let lines: Vec<String> = match (wrap, rotated) {
         (true, false) => wrap_lines(&text, font, size, avail.max(size)),
@@ -2234,6 +2242,11 @@ mod tests {
             .collect()
     }
 
+    /// The shown text of every block on the page, in drawing order.
+    fn block_texts(pdf: &str) -> Vec<String> {
+        pdf_text_blocks(pdf).into_iter().map(|(_, t)| t).collect()
+    }
+
     /// The `(x, y)` placement of each block's text matrix.
     fn matrix_xy(blocks: &[(String, String)]) -> Vec<(f32, f32)> {
         blocks
@@ -2323,5 +2336,49 @@ mod tests {
         assert!(blocks.iter().all(|b| b.0.starts_with("1 0 0 1 ")), "never turned sideways: {blocks:?}");
         let ys: Vec<f32> = matrix_xy(&blocks).iter().map(|&(_, y)| y).collect();
         assert!(ys.windows(2).all(|w| w[1] < w[0]), "still a downwards stack: {ys:?}");
+    }
+
+    /// Print: a General number in a narrow, tall stacked cell is fitted to the row height, not the
+    /// column width (it used to print `##` because the column had room for only two characters).
+    #[test]
+    fn a_vertical_general_number_fits_the_row_height() {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "B2", "input": 2024})).unwrap();
+        s.execute("home.orientation", json!({"range": "B2", "angle": "vertical"})).unwrap();
+        s.execute("home.columnWidth", json!({"cols": "B:B", "chars": 2})).unwrap();
+        s.execute("home.rowHeight", json!({"rows": "2:2", "height": 200})).unwrap();
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        let expected: Vec<String> =
+            gridcraft_numfmt::format_general_fit(2024.0, 11).expect("2024 fits in 11 characters").chars().map(|c| c.to_string()).collect();
+        assert_eq!(block_texts(&String::from_utf8_lossy(&pdf)), expected, "the row has room for the whole number");
+    }
+
+    /// Print: a line break in a stacked cell is dropped, not turned into a blank glyph. The grid
+    /// drops CR/LF clusters too; the old print path replaced them with a space before stacking.
+    #[test]
+    fn a_vertical_cell_drops_line_breaks_like_the_grid() {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "B2", "input": "A\nB"})).unwrap();
+        s.execute("home.orientation", json!({"range": "B2", "angle": "vertical"})).unwrap();
+        s.execute("home.rowHeight", json!({"rows": "2:2", "height": 120})).unwrap();
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        assert_eq!(block_texts(&String::from_utf8_lossy(&pdf)), ["A", "B"], "an extra space glyph was printed");
+    }
+
+    /// Print: shrink-to-fit and the `#` overflow replacement are horizontal-only; a stacked cell in
+    /// a narrow column keeps its formatted text and its font size.
+    #[test]
+    fn a_vertical_cell_is_not_shrunk_or_hash_filled() {
+        let mut s = s();
+        s.execute("cell.set", json!({"cell": "B2", "input": 12345.678})).unwrap();
+        s.execute("home.numberFormat", json!({"range": "B2", "format": "0.00"})).unwrap();
+        s.execute("home.orientation", json!({"range": "B2", "angle": "vertical"})).unwrap();
+        s.execute("home.shrinkToFit", json!({"range": "B2", "on": true})).unwrap();
+        s.execute("home.columnWidth", json!({"cols": "B:B", "chars": 2})).unwrap();
+        s.execute("home.rowHeight", json!({"rows": "2:2", "height": 200})).unwrap();
+        let (pdf, _) = pdf_of(&mut s, json!({}));
+        let pdf = String::from_utf8_lossy(&pdf);
+        assert_eq!(block_texts(&pdf).concat(), "12345.68");
+        assert!(pdf.contains(" 11 Tf"), "the stacked cell was shrunk: {pdf}");
     }
 }

@@ -986,7 +986,16 @@ pub(crate) fn cell_text_y(valign: VAlign, rect: Rect, gh: f32, z: f32) -> f32 {
 /// paths do; every other character, spaces included, keeps its own line. An empty string has no
 /// lines, so the cell draws nothing.
 pub fn vertical_text_lines(text: &str) -> Vec<String> {
-    text.graphemes(true).filter(|g| !g.chars().all(|c| matches!(c, '\r' | '\n'))).map(str::to_string).collect()
+    vertical_text_lines_upto(text, usize::MAX)
+}
+
+/// The first `max` stacked lines (see [`vertical_text_lines`]). Bounds the work for an
+/// input-sized cell; the row height clips far sooner in practice.
+fn vertical_text_lines_upto(text: &str, max: usize) -> Vec<String> {
+    if max == 0 {
+        return Vec::new();
+    }
+    text.graphemes(true).filter(|g| !g.chars().all(|c| matches!(c, '\r' | '\n'))).take(max).map(str::to_string).collect()
 }
 
 /// Where to put a `TextShape` holding a galley of `size` turned by `angle` (egui radians, so
@@ -1058,12 +1067,17 @@ pub(crate) fn paint_vertical_text(
     indent: f32,
     st: &Style,
 ) {
-    let lines = vertical_text_lines(text);
+    // The line box of the font (a glyph with a descender), so the stack keeps its own spacing.
+    let line_h = p.layout_no_wrap("0y".to_string(), font.clone(), color).size().y.max(font.size * 1.2);
+    // Only the glyphs that can reach the cell are laid out; a taller stack starts at the top
+    // anyway (`vertical_text_positions` clamps y0 to rect.top()). The block width comes from these
+    // visible glyphs, so a hidden glyph wider than every visible one can shift a centred or
+    // right-aligned column slightly; the PDF's 500-glyph cap has the same property.
+    let visible = ((rect.height() / line_h.max(1.0)).ceil().max(0.0) as usize).saturating_add(1);
+    let lines = vertical_text_lines_upto(text, visible);
     if lines.is_empty() {
         return;
     }
-    // The line box of the font (a glyph with a descender), so the stack keeps its own spacing.
-    let line_h = p.layout_no_wrap("0y".to_string(), font.clone(), color).size().y.max(font.size * 1.2);
     let galleys: Vec<Arc<egui::text::Galley>> = lines.iter().map(|l| p.layout_no_wrap(l.clone(), font.clone(), color)).collect();
     let widths: Vec<f32> = galleys.iter().map(|g| g.size().x).collect();
     let (block_x, ys) = vertical_text_positions(rect, left, &widths, line_h, h, v, pad, indent);
@@ -1293,7 +1307,7 @@ pub(crate) fn paint_quadrant(
         // fitted to the row height here (one digit per line), not to the column width.
         let vertical = st.align.is_vertical();
         let line_h = (size * 1.2).max(1.0);
-        let fit_w = if vertical { (rect.height() / z.max(0.1) / line_h * char_w).max(char_w) } else { avail_w / z.max(0.1) * z };
+        let fit_w = if vertical { (rect.height() / line_h * char_w).max(char_w) } else { avail_w / z.max(0.1) * z };
         let (mut text, ncolor, numeric, fill_char) = display_text(wb, sh, c, &v, st, fit_w, char_w);
         if sh.show_formulas && sh.cell(c).is_some_and(|cell| cell.formula.is_some()) {
             text = crate::formula_locale::display(&text, crate::i18n::current(p.ctx()).formula_locale(), wb, si);
@@ -3763,6 +3777,16 @@ mod tests {
         assert_eq!(vertical_text_lines("AB\nCD"), ["A", "B", "C", "D"]);
         assert_eq!(vertical_text_lines("AB\rCD"), ["A", "B", "C", "D"]);
         assert!(vertical_text_lines("\r\n").is_empty());
+    }
+
+    #[test]
+    fn vertical_text_lines_can_be_capped_to_the_rows_that_reach_the_cell() {
+        assert_eq!(vertical_text_lines_upto("ABCDEFGHIJ", 3), ["A", "B", "C"]);
+        assert!(vertical_text_lines_upto("ABCDEFGHIJ", 0).is_empty());
+        assert!(vertical_text_lines_upto("", 3).is_empty());
+        // A cluster still counts as one line, and line endings are still dropped.
+        assert_eq!(vertical_text_lines_upto("e\u{0301}X", 1), ["e\u{0301}"]);
+        assert_eq!(vertical_text_lines_upto("A\nB", 4), ["A", "B"]);
     }
 
     #[test]

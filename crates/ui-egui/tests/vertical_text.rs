@@ -81,6 +81,25 @@ fn whole(h: &Harness, cell: CellRef, text: &str) -> Option<(f32, f32, f32)> {
     })
 }
 
+/// The single-glyph galleys inside `cell`, top to bottom, concatenated. `allowed` is the expected
+/// text and keeps unrelated single-letter chrome out of the result.
+fn stack_text(h: &Harness, cell: CellRef, allowed: &str) -> String {
+    let r = cell_rect(h, cell);
+    let mut glyphs: Vec<(f32, String)> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            Shape::Text(t) if t.galley.job.text.chars().count() == 1 && allowed.contains(t.galley.job.text.as_str()) && r.contains(t.pos) => {
+                Some((t.pos.y, t.galley.job.text.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    glyphs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    glyphs.into_iter().map(|(_, t)| t).collect()
+}
+
 /// Selects `cell` and opens Format Cells on the Alignment tab — what a user does to edit that cell.
 fn open_alignment(h: &mut Harness, cell: &str) {
     h.state_mut().run("selection.set", json!({ "range": cell })).unwrap();
@@ -163,6 +182,21 @@ fn a_short_row_clips_the_stack_rather_than_rotating_it() {
     assert!(drawn.iter().all(|g| g.2.abs() < 1e-3), "still no rotation");
     assert!(drawn.windows(2).all(|w| w[1].1 > w[0].1), "still a downwards stack");
     assert!(whole(&h, b2, VERTICAL_TEXT).is_none(), "and never a horizontal fallback");
+}
+
+/// The General fit is derived from the row's screen height, so it must not grow with 1/z. At 200%
+/// zoom the old extra `/ z` printed the 8-character fit instead of the 11-character one.
+#[test]
+fn a_vertical_general_number_is_fitted_to_the_row_height_at_any_zoom() {
+    let mut h = harness();
+    h.state_mut().run("home.rowHeight", json!({"rows": "1:1", "height": 250.0})).unwrap();
+    h.state_mut().run("cell.set", json!({"cell": "B1", "input": 1234567890123.0})).unwrap();
+    h.state_mut().run("home.orientation", json!({"range": "B1", "angle": "vertical"})).unwrap();
+    h.state_mut().run("view.zoom", json!({"percent": 200})).unwrap();
+    h.state_mut().run("selection.set", json!({"range": "B1"})).unwrap();
+    h.run_steps(4);
+    let expected = gridcraft_engine::numfmt::format_general_fit(1234567890123.0, 11).expect("fits in 11 characters");
+    assert_eq!(stack_text(&h, CellRef::new(0, 1), &expected), expected, "the fit must not grow by 1/z");
 }
 
 /// C10: opening the dialog on a stacked cell shows the mode as switched on.
